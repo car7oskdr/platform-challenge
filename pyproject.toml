@@ -16,3 +16,11 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.8",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
