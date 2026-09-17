@@ -1,0 +1,15 @@
+[project]
+name = "challe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "car1100s", email = "carloscvl@hotmail.com" }
+]
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "prometheus-client>=0.26.0",
+    "uvicorn[standard]>=0.53.0",
+]
