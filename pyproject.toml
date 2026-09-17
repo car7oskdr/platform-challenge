@@ -1,7 +1,7 @@
 [project]
-name = "challe"
-version = "0.1.0"
-description = "Add your description here"
+name = "platform-challenge"
+version = "0.0.0" # la version real se toma de model/VERSION
+description = "Mini-platform k3d: FastAPI + PostgreSQL con CI/CD y ArgoCD"
 readme = "README.md"
 authors = [
     { name = "car1100s", email = "carloscvl@hotmail.com" }
@@ -13,3 +13,6 @@ dependencies = [
     "prometheus-client>=0.26.0",
     "uvicorn[standard]>=0.53.0",
 ]
+
+[tool.uv]
+package = false
