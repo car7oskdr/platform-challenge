@@ -118,6 +118,25 @@ final, que es la razón de que este archivo exista ya.
 - A partir de aquí, **la IA actualiza este archivo antes de cada commit**, no al
   final de cada fase. Queda anotado como regla en `CLAUDE.md`.
 
+**Postgres local y migración** (prompt: levantar `postgres:16-alpine` con
+`docker run`, esperar a `pg_isready`, aplicar `migrations/001_init.sql` y
+mostrar el `\d notes`)
+
+- Escribí yo la migración: tabla `notes` con `id BIGINT GENERATED ALWAYS AS
+  IDENTITY`, `content TEXT NOT NULL CHECK (length(trim(content)) > 0)` y
+  `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
+- En el prompt incluí yo la precaución de borrar un `challenge-db` previo con
+  `docker rm -f`, porque `CREATE TABLE IF NOT EXISTS` no modificaría una tabla
+  vieja con otro esquema. No hizo falta: no existía.
+- La IA verificó el resultado: `created_at` es `timestamp with time zone`, el
+  `CHECK` aparece como `notes_content_check`, reaplicar el SQL es idempotente
+  (`NOTICE: relation "notes" already exists, skipping`) y un `INSERT` de solo
+  espacios es rechazado por la restricción.
+- Hallazgo del proceso: `docker exec` sin `-i` no reenvía stdin, así que el
+  primer intento de aplicar la migración terminó con código 0 **sin crear nada**.
+  Un `ON_ERROR_STOP=1` no protege de esto porque no hubo error: psql leyó un
+  script vacío.
+
 **Qué pedí que hiciera la IA directamente**
 - Crear las carpetas vacías `app/`, `model/` y `migrations/`.
 - Ejecutar `uv lock` tras corregir yo el `requires-python`, y `ruff check --fix`
