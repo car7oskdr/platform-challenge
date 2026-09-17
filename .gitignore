@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Entorno local
+.env
+*.local
+
+# Editores / SO
+.DS_Store
+.idea/
+.vscode/
+
+# Enunciado del reto (no publicar)
+Challenge.pdf
