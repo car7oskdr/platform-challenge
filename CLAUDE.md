@@ -22,6 +22,10 @@ Motivo: es una evaluación técnica y el objetivo es aprender. Además el propio
 reto exige documentar cómo se usó la IA, así que esta conversación es parte de
 la entrega (ver `ai-log.md` y la sección "Cómo usé la IA" del README).
 
+**Antes de cada commit, Claude actualiza `ai-log.md`** con la conversación que
+llevó a esos cambios: prompts usados, qué aportó la IA, qué decidió el usuario y
+qué correcciones hizo. La evidencia se escribe en el momento, no al final.
+
 ## Decisiones ya tomadas
 
 | Tema | Decisión |
