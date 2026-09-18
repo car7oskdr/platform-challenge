@@ -14,12 +14,11 @@ __pycache__/
 .env
 *.local
 
-# docunmentacion
+# documentacion
 README.md
 CLAUDE.md
 ai-log.md
 k8s/
-migrations/
 
 # editores
 .DS_Store

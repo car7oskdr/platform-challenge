@@ -85,17 +85,22 @@ async def health():
 async def ready(response: Response):
     """Readiness: ¿puede esta réplica atender tráfico ahora mismo?
 
-    Devuelve 503 si la base no responde. Kubernetes solo mira el código HTTP,
-    así que un 200 con {"db": "down"} pasaría la probe igualmente.
+    Devuelve 503 si la base no responde o si el esquema aún no está aplicado.
+    Kubernetes solo mira el código HTTP, así que un 200 con {"db": "down"}
+    pasaría la probe igualmente.
     """
     try:
-        await db.ping(app.state.pool)
+        await db.check_ready(app.state.pool)
+    except db.SchemaNotReadyError as exc:
+        logger.warning("Readiness fallido, esquema incompleto: %s", exc)
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "unavailable", "database": "ok", "schema": "missing"}
     except Exception as exc:
         logger.warning("Readiness fallido: %s", exc)
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "unavailable", "database": "unreachable"}
 
-    return {"status": "ready", "database": "ok"}
+    return {"status": "ready", "database": "ok", "schema": "ok"}
 
 
 @app.post("/notes", response_model=NoteOut, status_code=status.HTTP_201_CREATED)

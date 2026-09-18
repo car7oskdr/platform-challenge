@@ -246,3 +246,85 @@ de construcción y la de destino deben coincidir, y de que uvicorn escuchando en
 de diagnóstico. Es lo deseable en producción, pero significa que una latencia
 alta no se depura desde dentro del contenedor, sino con métricas de
 cAdvisor/kubelet y `kubectl debug` con un contenedor efímero.
+
+---
+
+## Fase 3 — Manifiestos de Kubernetes
+
+**Prompts usados**
+- Las cuatro decisiones de diseño respondidas por mí antes de escribir YAML
+  (imagen al cluster, SQL al Job, Service headless, Job fallido), y
+  `ya se escribieron nuevos archivos en k8s son los manifiestos que se
+  utilizaran, analizalos y lanza las pruebas necesarias para acreditar la fase`
+- `ya corregí los tres, valida el Job borrando la tabla`
+- `ya corregí los dos, valida y commitea`
+
+**Qué decidí yo**
+- **Imagen al cluster:** `k3d image import` con `imagePullPolicy: IfNotPresent`,
+  no `Never`, para que en la Fase 4 el mismo manifiesto pueda bajarla de GHCR sin
+  tocar nada.
+- **SQL al Job:** dentro de la imagen de la app, con `python -m app.migrate`. El
+  esquema y el código que lo consulta comparten tag, así que es imposible
+  desplegar uno sin el otro, y el mismo comando sirve en local.
+- **Service headless** (`clusterIP: None`) porque el StatefulSet lo exige en
+  `serviceName`: de ahí salen los nombres por pod (`postgres-0.postgres`). Un
+  Service normal daría una IP virtual que balancea, irrelevante con una réplica
+  pero que impediría dirigirse a una concreta el día que haya varias.
+- Escribí `app/migrate.py` con reintentos de conexión en vez de orquestar el
+  orden de arranque entre el Job y Postgres.
+
+**Errores que detectó la IA**
+- **El Job no se podía aplicar.** En `migration-job.yaml` el `securityContext:`
+  estaba vacío y sus cuatro campos colgaban del `spec` del pod. El servidor lo
+  rechazaba con *strict decoding error: unknown field
+  "spec.template.spec.runAsNonRoot"*. Consecuencia que yo no había visto: la
+  tabla que había en el cluster la había creado yo a mano, **no el Job**, así que
+  el requisito no estaba realmente demostrado.
+- **La contraseña estaba en el ConfigMap** (`POSTGRES_PASSWORD: app`) además de
+  en el Secret, con valores distintos. La IA comprobó cuál ganaba: en `envFrom`
+  la última fuente pisa a la anterior, así que funcionaba por accidente. Si
+  alguien reordenaba esas dos entradas, Postgres arrancaba con una contraseña y
+  la app se conectaba con otra.
+- `app/migrate.py` no pasaba el linter (`E501` y formato), lo que habría parado
+  el CI de la Fase 4.
+- El tag de la imagen estaba duplicado en los manifiestos y en
+  `kustomization.yaml`; lo quité de los YAML para que `images:` sea la única
+  verdad, que es lo que el CI tocará en la Fase 5.
+
+**Validación del Job** (ejecutada por la IA a petición mía)
+1. `DROP TABLE notes` y confirmación de que la tabla no existe.
+2. Con la tabla borrada: `POST /notes` → 503, pero **`/ready` seguía en 200**.
+3. `kubectl apply -k` → el Job se completa en 3 s y sus logs muestran
+   `Migración aplicada: 001_init.sql`.
+4. `\d notes` confirma tabla, PK, CHECK y `timestamptz`.
+5. `POST /notes` → 201 y `GET` → 200, **con 0 reinicios de los pods**.
+6. Idempotencia: relanzado con la tabla ya creada, completa sin error y sin
+   duplicar datos.
+7. Reintentos: escalando Postgres a 0, el Job falla 5 veces con *Name or service
+   not known* y aplica la migración en cuanto la base vuelve.
+
+**Límite que cerré:** la IA señaló que `/ready` hacía `SELECT 1`, así que
+comprobaba que la base responde pero no que el esquema exista: con la tabla
+borrada devolvía 200 mientras `POST /notes` daba 503. Cambié la probe a
+`SELECT to_regclass('public.notes')`, una consulta al catálogo —barata— que
+distingue "la base no responde" de "el esquema no está aplicado".
+
+Verificado en el cluster: con la tabla presente, `/ready` → 200
+`{"database":"ok","schema":"ok"}`; tras un `DROP TABLE`, → 503
+`{"database":"ok","schema":"missing"}`, los pods salen del Service sin que
+`/health` se vea afectado y sin reinicios. Al aplicar el Job vuelven a Ready
+solos y `POST /notes` responde 201.
+
+**Otras comprobaciones**
+- `securityContext` efectivo en los pods: `uid=10001`, `runAsNonRoot`,
+  `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`,
+  `capabilities: drop ALL` y `readOnlyRootFilesystem` (ni `/tmp` es escribible).
+- `DATABASE_URL` se compone con `$(VAR)`, que solo expande variables declaradas
+  en `env` y no las de `envFrom`.
+- DNS del headless: `postgres` y `postgres-0.postgres` resuelven a la misma IP.
+- **RollingUpdate sin pérdida de peticiones:** 120 peticiones durante un
+  `rollout restart`, 0 fallos, gracias a `maxUnavailable: 0`, la readinessProbe y
+  el `preStop`. Un primer intento midiendo desde fuera con `port-forward` dio 157
+  fallos falsos: el port-forward muere con el pod al que apunta.
+- PVC `data-postgres-0` Bound de 1Gi sobre `local-path`, creado por el
+  `volumeClaimTemplate`.

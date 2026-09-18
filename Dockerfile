@@ -1,6 +1,6 @@
-###########
+############################
 # Etapa 1: dependencias
-###########
+############################
 FROM python:3.14-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /usr/local/bin/uv
@@ -14,9 +14,9 @@ COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev
 
-##########
+############################
 # Etapa 2: ejecución
-##########
+############################
 FROM python:3.14-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
@@ -28,8 +28,11 @@ RUN useradd --create-home --uid 10001 appuser
 WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
-COPY app/ ./app
-COPY model/ ./model
+
+COPY app/ ./app/
+COPY model/ ./model/
+
+COPY migrations/ ./migrations/
 
 USER appuser
 EXPOSE 8000

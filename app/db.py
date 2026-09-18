@@ -13,6 +13,8 @@ COMMAND_TIMEOUT = float(os.getenv("DB_COMMAND_TIMEOUT", "5"))
 
 PING_TIMEOUT = float(os.getenv("DB_PING_TIMEOUT", "2"))
 
+REQUIRED_TABLE = os.getenv("DB_REQUIRED_TABLE", "public.notes")
+
 
 async def create_pool() -> asyncpg.Pool:
     dsn = os.environ["DATABASE_URL"]
@@ -34,13 +36,17 @@ async def create_pool() -> asyncpg.Pool:
     return pool
 
 
-async def ping(pool: asyncpg.Pool) -> None:
-    """Comprueba que la base responde. Lanza excepción si no lo hace a tiempo.
+class SchemaNotReadyError(RuntimeError):
+    """La base responde, pero el esquema todavía no está aplicado."""
 
-    El `wait_for` acota la operación completa —incluida la espera por una
-    conexión libre del pool—, no solo la consulta.
-    """
-    await asyncio.wait_for(pool.fetchval("SELECT 1"), timeout=PING_TIMEOUT)
+
+async def check_ready(pool: asyncpg.Pool) -> None:
+    tabla = await asyncio.wait_for(
+        pool.fetchval("SELECT to_regclass($1)", REQUIRED_TABLE),
+        timeout=PING_TIMEOUT,
+    )
+    if tabla is None:
+        raise SchemaNotReadyError(f"falta la tabla {REQUIRED_TABLE}")
 
 
 class InvalidNoteError(ValueError):
