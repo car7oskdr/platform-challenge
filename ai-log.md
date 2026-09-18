@@ -626,3 +626,16 @@ README. Se añade un Ingress sin `host` —k3d publica el loadbalancer en localh
 así que cualquier cabecera entra— y se despliega **por commit**, no con
 `kubectl`: es la primera prueba de que el flujo GitOps ya es el camino normal
 para cambiar el cluster.
+
+**Superficie expuesta reducida.** El primer Ingress publicaba `/` como prefijo, y
+la IA señaló que eso dejaba `/metrics` accesible desde fuera: fuga de
+información —endpoints, volumen de tráfico, detalles de la infraestructura— sin
+necesidad, porque Prometheus scrapea el pod por la red interna del cluster. Pedí
+que no estuviera expuesto y que la solución fuera lo más formal posible.
+
+Se descartó un middleware de Traefik que bloqueara la ruta, porque es una lista
+negra: protege lo enumerado y deja pasar todo lo que se añada después. En su
+lugar, el Ingress enumera las rutas publicadas y **deniega por defecto**. Quedan
+fuera `/metrics`, `/health`, `/ready`, `/docs` y `/openapi.json`; las probes las
+hace el kubelet contra el pod y Swagger es documentación, no API. Publicadas solo
+`/notes` y `/version`.

@@ -144,10 +144,23 @@ spec:
   rules:
     # Sin host: k3d publica el loadbalancer del cluster en localhost:8080, así
     # que cualquier cabecera Host entra. En un cluster real aquí iría el dominio.
+    #
+    # Lista blanca: se enumeran las rutas que se publican y todo lo demás queda
+    # fuera por defecto. Deliberadamente NO se exponen:
+    #   /metrics             Prometheus scrapea el pod por la red interna.
+    #   /health, /ready      las probes las hace el kubelet contra el pod.
+    #   /docs, /openapi.json documentación, no API.
     - http:
         paths:
-          - path: /
+          - path: /notes
             pathType: Prefix
+            backend:
+              service:
+                name: app
+                port:
+                  name: http
+          - path: /version
+            pathType: Exact
             backend:
               service:
                 name: app
