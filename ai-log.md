@@ -576,3 +576,26 @@ lugar de depender de la que traiga la imagen del runner, que es coherente con
 Alternativa que consideré y descarté: que un tag ya existente no fuera error
 fatal, sino que saltara build y push dejando correr `update-manifests`. Haría el
 pipeline idempotente, pero pierde el aviso de que olvidé subir la versión.
+
+---
+
+## Fase 6 — ArgoCD y GitOps de punta a punta
+
+**Prompts usados**
+- `instala argocd y empecemos con la fase 6`
+- `sube a 0.5.0 y sigue la cadena completa`
+
+Instalé ArgoCD v3.5.3 con el chart `argo-cd` 10.9.2 en el namespace `argocd`, y
+apliqué a mano `k8s/argocd/application.yaml`: ese manifiesto es el arranque, no
+forma parte de `k8s/base` y por tanto ArgoCD nunca se gestiona a sí mismo.
+
+**Adopción de lo desplegado a mano.** ArgoCD adoptó los recursos que yo había
+creado con `kubectl apply -k` —coinciden nombre, tipo y namespace— y en la
+primera sincronización corrigió lo único que diferían: la imagen. El cluster
+pasó de `platform-challenge:0.1.0`, importada a mano en k3d, a
+`ghcr.io/car7oskdr/platform-challenge:0.4.0`, bajada del registry. El Job de
+migración se ejecutó como hook en su wave antes de desplegar la app.
+
+**selfHeal comprobado:** escalé el Deployment a 5 réplicas con `kubectl scale` y
+ArgoCD lo devolvió a 2 en segundos. A partir de aquí el cluster obedece al
+repositorio, no a mí: cualquier cambio que no pase por un commit se deshace solo.
