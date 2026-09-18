@@ -1,0 +1,239 @@
+{
+  "title": "Platform Challenge — tres capas",
+  "uid": "platform-challenge",
+  "tags": ["platform-challenge"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Capa 1 — Código (métricas de la aplicación)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Latencia HTTP p95 y p99 por endpoint",
+      "description": "Los buckets se suman entre réplicas ANTES de aplicar el cuantil: la media de dos p95 no es el p95 del conjunto. Se excluyen /health y /ready porque las probes dominan el volumen y diluirían el percentil real.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{path!~\"/health|/ready\"}[5m])) by (le, path))",
+          "legendFormat": "p95 {{path}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{path!~\"/health|/ready\"}[5m])) by (le, path))",
+          "legendFormat": "p99 {{path}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Peticiones por código de estado",
+      "description": "Separa 2xx de 4xx y 5xx. Un 422 es el cliente mandando datos inválidos; un 503 es una dependencia caída.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 7, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_requests_total{path!~\"/health|/ready\"}[5m])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Tasa de error real (solo 5xx)",
+      "description": "El label outcome=\"failure\" incluye los 4xx. Para alertar solo cuentan los 5xx: un cliente usando mal la API no es una incidencia de servicio. El 'or vector(0)' es imprescindible: sin 5xx el selector no casa con ninguna serie y el panel mostraría 'No data', que visualmente es idéntico a 'las métricas no llegan'.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) or vector(0)) / sum(rate(http_requests_total[5m]))",
+          "legendFormat": "5xx"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Capa 2 — Base de datos (¿espera o consulta?)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "p95: espera por conexión vs. consulta",
+      "description": "EL PANEL CLAVE. Si la línea de espera se despega de la de consulta, el cuello de botella es el pool y no PostgreSQL: las peticiones no trabajan, hacen cola. Medido con max_size=1: 9,43 ms de espera frente a 0,91 ms de consulta.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(db_acquire_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "espera por conexión p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "consulta p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pool de conexiones",
+      "description": "Agotamiento = abiertas == máximo Y libres == 0. Con min_size=0 el pool arranca vacío, así que \"libres = 0\" por sí solo también es cierto con la app ociosa.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 0, "lineWidth": 2 } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(db_pool_max_size)", "legendFormat": "máximo configurado" },
+        { "refId": "B", "expr": "sum(db_pool_size)", "legendFormat": "abiertas" },
+        { "refId": "C", "expr": "sum(db_pool_idle)", "legendFormat": "libres" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Operaciones de base de datos por resultado",
+      "description": "outcome distingue success, invalid (dato rechazado por una restricción) y error (fallo real o cancelación). Un cliente mandando basura no debe ensuciar los errores de la base.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 20 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(db_query_duration_seconds_count[5m])) by (operation, outcome)",
+          "legendFormat": "{{operation}} — {{outcome}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Capa 3 — Contenedor y nodo",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU del contenedor frente a lo solicitado",
+      "description": "No hay limits.cpu, así que no puede haber throttling: la capa contenedor queda descartada por construcción. Superar el request de forma sostenida indica mal dimensionado, no un fallo.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"challenge\",container=\"app\"}[5m])) by (pod)",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(kube_pod_container_resource_requests{namespace=\"challenge\",container=\"app\",resource=\"cpu\"})",
+          "legendFormat": "requests (total)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memoria del contenedor frente al límite",
+      "description": "Aquí SÍ hay techo (256 Mi). Acercarse al límite significa riesgo de OOMKill, y un pod que muere deja al otro con todo el tráfico: causa posible de latencia alta.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "container_memory_working_set_bytes{namespace=\"challenge\",container=\"app\"}",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max(kube_pod_container_resource_limits{namespace=\"challenge\",container=\"app\",resource=\"memory\"})",
+          "legendFormat": "límite"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Nodo: saturación de CPU y carga por núcleo",
+      "description": "Si la latencia sube, el pod no está al límite y aquí hay saturación, la causa es el nodo o sus vecinos. La carga se normaliza por núcleo para que los nodos sean comparables.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "custom": { "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) by (instance)",
+          "legendFormat": "CPU usada {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "node_load1 / on(instance) group_left count(node_cpu_seconds_total{mode=\"idle\"}) by (instance)",
+          "legendFormat": "carga/núcleo {{instance}}"
+        }
+      ]
+    }
+  ]
+}

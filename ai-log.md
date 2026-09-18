@@ -417,6 +417,23 @@ saturación del nodo    7,3 %          carga/núcleo    0,31
 ```
 Con 428 consultas/s sostenidas. Las cuatro alertas cargan con `salud=ok`.
 
+**Dashboard provisionado**
+- Decidí no incrustar el JSON dentro del YAML: vive como archivo `.json` real en
+  `k8s/base/dashboards/` y lo empaqueta el `configMapGenerator` de Kustomize con
+  `disableNameSuffixHash: true` y el label `grafana_dashboard: "1"`. Así el JSON
+  se puede editar y diferenciar como lo que es.
+- Antes de escribir nada comprobé que el sidecar corre con `NAMESPACE=ALL`, así
+  que descubre el ConfigMap aunque viva en `challenge` junto a la app. Si hubiera
+  estado limitado a `monitoring`, el fallo habría sido silencioso.
+- Datasource como variable `${DS_PROMETHEUS}` de tipo datasource, no un uid fijo:
+  el dashboard es portable a cualquier Grafana sin editar el JSON.
+- Tres filas, una por capa: código, base de datos, contenedor y nodo. El panel
+  central superpone p95 de espera por conexión y p95 de consulta: cuando la línea
+  de espera se despega de la de consulta, el diagnóstico es inmediato.
+- Verificado: el sidecar escribe `/tmp/dashboards/platform-challenge.json`, el
+  dashboard aparece en Grafana como provisionado, y **las 16 queries de los 9
+  paneles devuelven datos** ejecutadas a través del datasource de Grafana.
+
 **Lección repetida dos veces, para el README:** una serie que nace alta no
 produce `rate()`. Tanto la ráfaga de 5xx como las 300 peticiones de prueba
 quedaron invisibles (`p95 = nan`) porque todos los incrementos ocurrieron entre

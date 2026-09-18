@@ -19,3 +19,12 @@ labels:
   - includeSelectors: false
     pairs:
       app.kubernetes.io/part-of: platform-challenge
+
+configMapGenerator:
+  - name: app-dashboard
+    files:
+      - dashboards/platform-challenge.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"
