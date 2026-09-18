@@ -137,6 +137,45 @@ mostrar el `\d notes`)
   Un `ON_ERROR_STOP=1` no protege de esto porque no hubo error: psql leyó un
   script vacío.
 
+**Pool de conexiones, endpoints de negocio y métricas**
+
+- Decidí que la app **arranque degradada** si Postgres no responde, en vez de
+  fallar como hace con `model/VERSION`. La asimetría es intencionada: un
+  `VERSION` ausente es un error de build irrecuperable; Postgres es una
+  dependencia externa que se recupera sola. La IA advirtió de la trampa
+  concreta: `asyncpg.create_pool()` abre `min_size=10` conexiones al crearse, así
+  que sin `min_size=0` el `lifespan` habría reventado igual y el pod acabaría en
+  `CrashLoopBackOff`, justo lo contrario de lo decidido.
+- La IA encontró un fallo real revisando `create_note`: un `content` de solo
+  espacios pasaba la validación de Pydantic (`min_length=1` cuenta espacios),
+  llegaba a Postgres y violaba el `CHECK`, y mi `except Exception` lo reportaba
+  como `503 base de datos no disponible`. Un error del cliente disfrazado de
+  dependencia caída, que además habría disparado en falso la alerta de 5xx de la
+  Fase 3.5. Lo arreglé por partida doble: `strip_whitespace=True` en el modelo y
+  una excepción propia `InvalidNoteError` en la capa de datos.
+- También señaló que `limit` no tenía cota (`?limit=10000000` es una consulta
+  cara gratis); lo acoté con `Query(ge=1, le=100)`.
+- Escribí `app/metrics.py` a partir de un primer esqueleto suyo, cambiando las
+  decisiones que no me convencieron: buckets explícitos en lugar de los del
+  paquete, `status` también como label del histograma, y `outcome` reducido a
+  `success`/`failure` (el label `status` ya permite separar un 500 de un 503).
+- Trampas que incorporé del repaso: usar la plantilla de la ruta y no la URL
+  concreta como label, contar las excepciones no controladas —que nunca llegan a
+  tener `response.status_code`— y excluir `/metrics` de sus propias métricas.
+
+**Verificación de cierre de la Fase 1** (la ejecutó la IA a petición mía)
+
+- Tráfico real contra los endpoints: `201` al crear, `422` con espacios en
+  blanco y con 1500 caracteres, `422` con `limit` fuera de rango, `404` a una
+  URL inventada (agrupada como `path="unmatched"`).
+- Camino degradado, parando el contenedor de Postgres: `/health` y `/version`
+  siguen en `200`, mientras `/ready`, `POST /notes` y `GET /notes` responden
+  `503`. Al volver a arrancar la base, `/ready` vuelve a `200` sin reiniciar la
+  app: el pool se recupera solo.
+- `/metrics` expone el histograma con buckets poblados y el contador separando
+  `outcome="success"` de `outcome="failure"`, con `Content-Type` del formato de
+  exposición de Prometheus.
+
 **Qué pedí que hiciera la IA directamente**
 - Crear las carpetas vacías `app/`, `model/` y `migrations/`.
 - Ejecutar `uv lock` tras corregir yo el `requires-python`, y `ruff check --fix`
