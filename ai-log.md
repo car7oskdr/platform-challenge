@@ -617,3 +617,12 @@ no aparece. Un pod creado con `kubectl run`, sin las marcas de seguimiento de la
 Application, le resulta invisible. Permite depurar con pods efímeros sin que los
 borre, pero significa que GitOps no garantiza que el cluster contenga *solo* lo
 que hay en git.
+
+**Ingress (cierre de la Fase 6).** El puerto 8080 del host estaba mapeado al
+loadbalancer de k3d desde la Fase 0 y Traefik respondía, pero no había ningún
+Ingress: `http://localhost:8080/version` daba 404 y la app solo era accesible con
+`port-forward`. Lo detectó la IA al preparar la sección "cómo correrlo" del
+README. Se añade un Ingress sin `host` —k3d publica el loadbalancer en localhost,
+así que cualquier cabecera entra— y se despliega **por commit**, no con
+`kubectl`: es la primera prueba de que el flujo GitOps ya es el camino normal
+para cambiar el cluster.
