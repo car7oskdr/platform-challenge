@@ -32,6 +32,8 @@ metadata:
   name: app
   labels:
     app: platform-challenge
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   replicas: 2
   selector:

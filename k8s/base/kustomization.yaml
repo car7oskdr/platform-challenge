@@ -3,28 +3,39 @@ kind: Kustomization
 
 namespace: challenge
 
+# servicemonitor.yaml requiere los CRDs del Prometheus Operator, que se instala
+# aparte con Helm.
 resources:
-  - namespace.yaml
-  - postgres.yaml
-  - migration-job.yaml
-  - app.yaml
-  - servicemonitor.yaml
+- namespace.yaml
+- postgres.yaml
+- migration-job.yaml
+- app.yaml
+- servicemonitor.yaml
 
+# Única fuente de verdad del tag: los manifiestos llevan `image:
+# platform-challenge` sin tag. El CI reescribe newTag con `kustomize edit set
+# image` y hace commit-back.
+#
+# El archivo ya está en la forma canónica de kustomize, de modo que cada
+# commit-back produce un diff de una línea. Reindentarlo a mano lo rompe.
 images:
-  - name: platform-challenge
-    newName: platform-challenge
-    newTag: 0.1.0
+- name: platform-challenge
+  newName: platform-challenge
+  newTag: 0.1.0
 
 labels:
-  - includeSelectors: false
-    pairs:
-      app.kubernetes.io/part-of: platform-challenge
+- pairs:
+    app.kubernetes.io/part-of: platform-challenge
 
+# El dashboard se mantiene como .json editable para poder exportarlo desde
+# Grafana y pegarlo aquí. El sidecar lo descubre por el label, no por el nombre.
+# Sin disableNameSuffixHash cada cambio dejaría un ConfigMap huérfano y Grafana
+# mostraría varias copias.
 configMapGenerator:
-  - name: app-dashboard
-    files:
-      - dashboards/platform-challenge.json
-    options:
-      disableNameSuffixHash: true
-      labels:
-        grafana_dashboard: "1"
+- files:
+  - dashboards/platform-challenge.json
+  name: app-dashboard
+  options:
+    disableNameSuffixHash: true
+    labels:
+      grafana_dashboard: "1"

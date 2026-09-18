@@ -497,3 +497,55 @@ el CI. Sin eso habría un bucle infinito.
 **Política que asumo:** con el tag bloqueante, todo push a `main` que toque
 `app/**` sin subir `model/VERSION` deja el CI en rojo. Es deliberado, y por eso
 esta fase sube la versión a **0.2.0**.
+
+---
+
+## Fase 5 — Commit-back con `kustomize edit set image`
+
+**Prompts usados**
+- `ya se escribio apliacation.yaml para la fase 5 de argo, analiza`
+- (respuesta razonada sobre la asimetría del fallo del commit-back)
+- `sube a 0.3.0, commitea y sigue el run`
+
+**Qué decidí yo**
+- **`update-manifests` va después de publicar la imagen.** Los dos fallos
+  posibles no son simétricos: si falla el commit-back tras publicar, queda una
+  imagen inerte que nadie usa; si el manifiesto se actualizara antes de publicar,
+  apuntaría a una imagen inexistente y el resultado sería `ImagePullBackOff` en
+  producción. El orden garantiza que el repo nunca referencie algo no publicado.
+- **Coste operativo asumido:** si el commit-back falla y se relanza el workflow
+  entero, `build-push` fallará porque el tag ya existe. La recuperación correcta
+  es *Re-run failed jobs*, que conserva las salidas de los jobs que pasaron. Si
+  se relanza todo, hay que subir la versión.
+- **Sync-waves en lugar del hook `PreSync`** que la IA había recomendado en la
+  Fase 1: Postgres en la wave -1, el Job de migración como hook `Sync` en la
+  wave 0 y la app en la wave 1. Con `PreSync`, en un cluster limpio el Job
+  arrancaría antes de que Postgres exista, agotaría sus 30 reintentos y la
+  sincronización fallaría entera.
+- `kustomization.yaml` reescrito a la forma canónica de kustomize, para que cada
+  commit-back produzca un diff de una sola línea en lugar de reindentar el
+  archivo entero.
+
+**Qué detectó la IA**
+- El checkout de `update-manifests` era superficial (`fetch-depth` por defecto),
+  y el bucle de reintento hace `git pull --rebase`: un rebase sobre un clon
+  superficial puede fallar justo en el caso de carrera para el que se escribió el
+  bucle. Corregido con `fetch-depth: 0`.
+- Al normalizar el bloque `labels:` desapareció `includeSelectors: false`. La IA
+  comprobó el render: los selectores siguen intactos porque en el transformador
+  `labels:` ese valor ya es `false` por defecto. De lo contrario, el `selector` de
+  un Deployment es inmutable y ArgoCD habría fallado con `field is immutable`.
+- Verificó además que la reindentación no altera el render: la única diferencia
+  frente al commit anterior son los dos `sync-wave` añadidos a propósito.
+- **Límite de la invariante:** el orden protege contra el caso habitual, pero
+  `update-manifests` no vuelve a comprobar que la imagen exista. Si alguien
+  borrara el paquete entre el push y el commit-back, el repo apuntaría a algo
+  inexistente igualmente. La garantía la da el orden, no una verificación.
+
+**Antes, en la Fase 4:** la IA me propuso `aquasecurity/trivy-action@0.28.0` sin
+verificar que existiera, y el primer run murió al resolver la acción (los tags de
+ese repo llevan prefijo `v`). GitHub resuelve las acciones antes de ejecutar el
+job, así que no llegó a construirse ni publicarse nada. En la revisión siguiente
+la IA comprobó una por una las versiones de las ocho acciones contra la API de
+GitHub, y ahí resultó que su otra sugerencia —bajar a `checkout@v5`— también era
+incorrecta: la última es `v7`.

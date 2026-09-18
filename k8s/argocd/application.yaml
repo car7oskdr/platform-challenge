@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-challenge
+  namespace: argocd
+  finalizers:
+    # Sin esto, borrar la Application deja los recursos huérfanos en el cluster.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/car7oskdr/platform-challenge.git
+    targetRevision: main
+    path: k8s/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: challenge
+  syncPolicy:
+    automated:
+      # prune borra lo que desaparece del repositorio; selfHeal revierte los
+      # cambios hechos a mano en el cluster.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

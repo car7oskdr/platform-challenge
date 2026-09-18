@@ -12,6 +12,8 @@ on:
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
+    # k8s/** queda fuera a propósito: el commit-back de update-manifests no debe
+    # volver a disparar el workflow.
     paths:
       - "app/**"
       - "migrations/**"
@@ -21,6 +23,9 @@ on:
       - "uv.lock"
       - ".github/workflows/ci.yml"
 
+# Dos ejecuciones simultáneas comprobarían que el tag está libre antes de que
+# ninguna publique. En main no se cancela: abortar a mitad de la publicación
+# dejaría el registry con un manifiesto incompleto.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -36,9 +41,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
 
@@ -55,7 +60,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Lint del Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
           failure-threshold: error
@@ -63,8 +68,9 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
+          # Un secreto borrado en el último commit sigue en el historial.
           fetch-depth: 0
 
       - name: Gitleaks
@@ -77,14 +83,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.version.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Leer model/VERSION
         id: version
         run: |
-          # tr elimina el salto de línea final: un tag con \n falla más tarde y
-          # de forma confusa, ya dentro del registry.
           VERSION="$(tr -d '[:space:]' < model/VERSION)"
           if [ -z "$VERSION" ]; then
             echo "::error::model/VERSION está vacío"; exit 1
@@ -94,16 +99,17 @@ jobs:
           echo "image=${REGISTRY}/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
           echo "Versión: $VERSION"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
       - name: Login en GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Un tag que cambia de contenido rompe la trazabilidad.
       - name: El tag no debe existir ya
         if: github.event_name == 'push'
         run: |
@@ -115,8 +121,10 @@ jobs:
           fi
           echo "$IMAGE:$VERSION está libre."
 
+      # Una imagen multi-arch no se puede --load, y Trivy necesita algo que
+      # inspeccionar antes de publicar.
       - name: Build local para escanear
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -124,6 +132,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # CRITICAL bloquea; el resto informa, para que un CVE sin parche en la
+      # imagen base no deje la entrega sin desplegar.
       - name: Trivy — CRITICAL (bloquea)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -143,8 +153,10 @@ jobs:
           exit-code: "0"
           format: table
 
+      # Los runners son amd64 y el k3d local corre sobre ARM: sin arm64 el pod
+      # fallaría con "exec format error".
       - name: Build multi-arch y push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -155,6 +167,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # El escaneo bloqueante solo ve amd64 porque `load` carga una plataforma.
       - name: Trivy — arm64 publicado (informativo)
         if: github.event_name == 'push'
         continue-on-error: true
@@ -171,3 +184,66 @@ jobs:
           echo "### Imagen publicada" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ steps.version.outputs.image }}:sha-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ArgoCD mira el repositorio, no el registry: sin este commit el cluster no se
+  # entera de que hay una versión nueva.
+  update-manifests:
+    needs: build-push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      # Ampliado solo aquí: los demás jobs no escriben en el repositorio.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # La rama y no el SHA: un checkout detached no se puede empujar.
+          ref: ${{ github.ref_name }}
+          # Historial completo: el rebase del reintento no funciona sobre un
+          # clon superficial.
+          fetch-depth: 0
+
+      - name: Instalar kustomize
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
+            | bash -s 5.4.3 /usr/local/bin
+          kustomize version
+
+      - name: Apuntar el manifiesto a la imagen publicada
+        working-directory: k8s/base
+        run: |
+          kustomize edit set image \
+            platform-challenge=${{ needs.build-push.outputs.image }}:${{ needs.build-push.outputs.version }}
+
+      - name: Commit-back
+        run: |
+          if git diff --quiet -- k8s/base/kustomization.yaml; then
+            echo "El manifiesto ya apunta a ${{ needs.build-push.outputs.version }}; nada que hacer."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/base/kustomization.yaml
+          git commit -m "chore(deploy): despliega ${{ needs.build-push.outputs.version }}
+
+          Imagen: ${{ needs.build-push.outputs.image }}:${{ needs.build-push.outputs.version }}
+          Origen: ${{ github.sha }}"
+
+          # Otro push pudo entrar en main mientras se construía la imagen.
+          for intento in 1 2 3; do
+            if git push; then
+              echo "Commit-back publicado en el intento $intento."
+              exit 0
+            fi
+            echo "Push rechazado; rebase sobre origin/${{ github.ref_name }} e intento de nuevo."
+            git pull --rebase origin ${{ github.ref_name }}
+          done
+          echo "::error::No se pudo hacer commit-back tras 3 intentos."
+          exit 1
+
+      - name: Resumen
+        run: |
+          echo "### Manifiesto actualizado" >> $GITHUB_STEP_SUMMARY
+          echo "\`k8s/base/kustomization.yaml\` → \`${{ needs.build-push.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD detectará este commit y sincronizará el cluster." >> $GITHUB_STEP_SUMMARY
