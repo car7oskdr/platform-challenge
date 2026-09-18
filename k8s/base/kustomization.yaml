@@ -8,6 +8,7 @@ resources:
   - postgres.yaml
   - migration-job.yaml
   - app.yaml
+  - servicemonitor.yaml
 
 images:
   - name: platform-challenge

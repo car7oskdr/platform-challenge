@@ -1,0 +1,75 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: app
+  labels:
+    app: platform-challenge
+spec:
+  selector:
+    matchLabels:
+      app: platform-challenge
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: app-alerts
+  labels:
+    app: platform-challenge
+spec:
+  groups:
+    - name: platform-challenge
+      rules:
+        - alert: LatenciaAltaP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{path!~"/health|/ready"}[5m])) by (le, path)
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "p95 por encima de 500 ms en {{ $labels.path }}"
+            description: "p95 = {{ $value | humanizeDuration }} durante 10 minutos."
+
+        - alert: TasaDeErrores5xx
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+              / sum(rate(http_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Más del 5% de las respuestas son 5xx"
+            description: "Tasa de error = {{ $value | humanizePercentage }}."
+
+        - alert: PoolDeConexionesAgotado
+          expr: |
+            (db_pool_size == db_pool_max_size) and (db_pool_idle == 0)
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pool de conexiones agotado en {{ $labels.pod }}"
+            description: >-
+              Las peticiones esperan turno. Contrastar con
+              db_acquire_duration_seconds: si la espera domina la latencia HTTP
+              y db_query_duration_seconds es normal, el cuello de botella es el
+              pool, no PostgreSQL.
+
+        - alert: ReplicasNoListas
+          expr: |
+            kube_deployment_status_replicas_ready{deployment="app", namespace="challenge"}
+              < kube_deployment_spec_replicas{deployment="app", namespace="challenge"}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Hay réplicas de app que no están listas"
+            description: "Listas: {{ $value }}. Revisar /ready y el Job de migración."

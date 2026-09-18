@@ -96,7 +96,7 @@ async def ready(response: Response):
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "unavailable", "database": "ok", "schema": "missing"}
     except Exception as exc:
-        logger.warning("Readiness fallido: %s", exc)
+        logger.warning("Readiness fallido: %r", exc)
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "unavailable", "database": "unreachable"}
 

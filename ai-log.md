@@ -328,3 +328,98 @@ solos y `POST /notes` responde 201.
   fallos falsos: el port-forward muere con el pod al que apunta.
 - PVC `data-postgres-0` Bound de 1Gi sobre `local-path`, creado por el
   `volumeClaimTemplate`.
+
+---
+
+## Fase 3.5 — Prometheus, Grafana e instrumentación de la base de datos
+
+Fase que no pide el enunciado, pero sin la que la sección de observabilidad del
+README se escribiría a ciegas. Salió de una observación de la IA al revisar el
+plan de fases.
+
+**Prompts usados**
+- `el ServiceMonitor va en el repo, analiza los nuevos cambios y valida`
+- `quito la alerta de throttling y repasemos las queries de cada panel`
+- `si, añado el histograma de la base`
+- `ya corregí los dos, llévalo al cluster y validamos en Grafana`
+
+**Qué decidí yo**
+- `kube-prometheus-stack` se instala con Helm a mano (es infraestructura de
+  plataforma), pero **el `ServiceMonitor` y las `PrometheusRule` viven en este
+  repo**: describen mi aplicación, qué expone y cuándo debe alertar.
+- **Quitar la alerta de throttling.** No declaro `limits.cpu`, así que no hay
+  cuota CFS y el throttling es imposible por construcción. Para el README es una
+  respuesta más fuerte que un panel vacío: descarta la capa contenedor de
+  entrada.
+- **Dos histogramas de base de datos, no uno.** `db_acquire_duration_seconds`
+  mide la espera por una conexión del pool y `db_query_duration_seconds` lo que
+  tarda Postgres. Con uno solo, un pool agotado parecería una base de datos
+  rápida mientras el usuario espera.
+- Gauges del pool leídas con `set_function` en el momento del scrape, sin coste
+  en el camino de las peticiones.
+- Las métricas de datos se declaran en `db.py` y no en `metrics.py`, porque ese
+  módulo importa starlette: si `db.py` lo importara, la capa de datos arrastraría
+  el framework web. `prometheus_client` usa un registro global, así que ambas
+  familias salen por `/metrics` igual.
+- Buckets desde 0,5 ms para la base de datos: con los de HTTP (desde 5 ms) todas
+  las consultas caerían en el primer bucket y el p95 no distinguiría nada.
+
+**Pregunta que me planteó la IA y respondí**
+Si `/notes` sube a 800 ms, no hay throttling posible, el nodo está tranquilo y el
+p95 de la base es normal, ¿qué queda? **Encolamiento en el pool**: las peticiones
+no trabajan, esperan turno por un recurso lógico que no aparece en ninguna
+métrica de CPU ni de Postgres. Segunda causa con el mismo perfil: bloquear el
+event loop con trabajo síncrono.
+
+**Errores que detectó la IA**
+- **Mi señal de agotamiento del pool era falsa.** Propuse alertar con
+  `db_pool_idle == 0`, pero con `min_size=0` el pool no abre conexiones hasta
+  usarlas: en reposo `size=0, idle=0`, idéntico al caso de agotamiento. La
+  condición correcta es `(db_pool_size == db_pool_max_size) and
+  (db_pool_idle == 0)`. Es una consecuencia de la decisión de la Fase 1 de
+  arrancar degradado, que cambió el significado de una métrica dos fases después.
+- **Las esperas que acababan en timeout no se medían.** En `check_ready`, el
+  `asyncio.wait_for` cancela la corrutina antes de la línea que observa el
+  histograma de espera: justo cuando el pool está tan saturado que las probes
+  expiran, el dato desaparecía. Lo moví a un `finally`.
+- **Las violaciones de restricción contaban como `outcome="error"`**, mezclando
+  un error del cliente con un fallo de la base. Ahora llevan `outcome="invalid"`,
+  coherente con la separación 400/503 de la capa HTTP.
+
+**Errores en las queries que la propia IA me había propuesto** (los encontró al
+validarlas contra el cluster)
+- `node_load1 / count(...) by (instance)` devolvía vacío: una operación entre
+  vectores exige que coincidan **todas** las labels, y tras el `count` solo queda
+  `instance`. Correcto: `node_load1 / on(instance) group_left count(...)`.
+- Una variante con `bool` de la señal de agotamiento daba falso positivo con
+  `idle=10`. **`and` en PromQL opera sobre la existencia de series, no sobre
+  valores**: con `bool` la comparación deja de filtrar y la serie sobrevive.
+
+**Experimento del pool** (200 peticiones, 50 en paralelo, mismo tráfico):
+
+| | pool = 1 | pool = 10 |
+|---|---|---|
+| Tiempo HTTP total | 4,98 s | 2,19 s |
+| Esperando conexión | 4,69 s (94 %) | 1,22 s (56 %) |
+| Ejecutando consulta | 0,09 s (2 %) | 0,33 s (15 %) |
+
+Con el pool a 1, el 94 % del tiempo es cola. Con un solo histograma se habría
+visto una media de 0,46 ms por consulta y la conclusión habría sido que Postgres
+va perfecto.
+
+**Validación en el cluster, a través del datasource de Grafana**
+```
+p95 HTTP /notes        4,77 ms
+  ├─ espera de pool    0,48 ms
+  └─ consulta a la DB  1,01 ms
+CPU del contenedor     0,26 cores     memoria/límite  19,7 %
+saturación del nodo    7,3 %          carga/núcleo    0,31
+```
+Con 428 consultas/s sostenidas. Las cuatro alertas cargan con `salud=ok`.
+
+**Lección repetida dos veces, para el README:** una serie que nace alta no
+produce `rate()`. Tanto la ráfaga de 5xx como las 300 peticiones de prueba
+quedaron invisibles (`p95 = nan`) porque todos los incrementos ocurrieron entre
+dos scrapes y la primera muestra de una serie es su línea base. Con carga
+sostenida los percentiles salen correctos. Es un argumento a favor de `for:`
+largos en las alertas y una advertencia sobre las pruebas de carga cortas.
