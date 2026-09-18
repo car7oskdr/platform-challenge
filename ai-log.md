@@ -549,3 +549,30 @@ job, así que no llegó a construirse ni publicarse nada. En la revisión siguie
 la IA comprobó una por una las versiones de las ocho acciones contra la API de
 GitHub, y ahí resultó que su otra sugerencia —bajar a `checkout@v5`— también era
 incorrecta: la última es `v7`.
+
+**El fallo del commit-back, en vivo.** Al ejercitar la Fase 5 con `0.3.0`,
+`build-push` publicó la imagen y `update-manifests` falló:
+`/usr/local/bin/kustomize exists. Remove it first.` — los runners de
+`ubuntu-latest` ya traen kustomize preinstalado y el instalador oficial se niega
+a sobrescribirlo.
+
+La invariante aguantó: quedó una imagen publicada que nadie usaba, y en ningún
+momento el repo apuntó a algo inexistente. El fallo cayó del lado bueno de la
+asimetría.
+
+Pero la recuperación **no** fue la que yo había descrito. *Re-run failed jobs*
+reejecuta el workflow tal como estaba en ese commit, y ese workflow era
+justamente el roto. Y como `.github/workflows/ci.yml` sí está en el filtro de
+`paths`, subir el arreglo dispara un run nuevo que choca con la comprobación de
+tag inmutable. Conclusión que va al README: *Re-run failed jobs* recupera un
+fallo transitorio; **si el fallo está en el propio workflow, hay que subir la
+versión**. De ahí el salto a `0.4.0`.
+
+Arreglo: instalar kustomize en `$RUNNER_TEMP` y anteponerlo al `PATH` con
+`$GITHUB_PATH`, en vez de en `/usr/local/bin`. Mantiene la versión fijada en
+lugar de depender de la que traiga la imagen del runner, que es coherente con
+`uv.lock` y con los tags fijos del resto del proyecto.
+
+Alternativa que consideré y descarté: que un tag ya existente no fuera error
+fatal, sino que saltara build y push dejando correr `update-manifests`. Haría el
+pipeline idempotente, pero pierde el aviso de que olvidé subir la versión.

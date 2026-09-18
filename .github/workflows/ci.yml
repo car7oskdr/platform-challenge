@@ -205,9 +205,14 @@ jobs:
 
       - name: Instalar kustomize
         run: |
+          # El runner ya trae kustomize en /usr/local/bin y el instalador se
+          # niega a sobrescribirlo. Se instala en un directorio propio, que
+          # ademas mantiene la version fijada y no a merced de la imagen del
+          # runner.
           curl -sSfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh \
-            | bash -s 5.4.3 /usr/local/bin
-          kustomize version
+            | bash -s 5.4.3 "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/kustomize" version
 
       - name: Apuntar el manifiesto a la imagen publicada
         working-directory: k8s/base
