@@ -176,6 +176,10 @@ mostrar el `\d notes`)
   `outcome="success"` de `outcome="failure"`, con `Content-Type` del formato de
   exposición de Prometheus.
 
+- Último apunte del repaso: `pydantic` se importaba directamente pero llegaba
+  como dependencia transitiva de `fastapi`. Lo declaré explícito con `uv add`,
+  para no depender de que fastapi mantenga esa dependencia en el futuro.
+
 **Qué pedí que hiciera la IA directamente**
 - Crear las carpetas vacías `app/`, `model/` y `migrations/`.
 - Ejecutar `uv lock` tras corregir yo el `requires-python`, y `ruff check --fix`
