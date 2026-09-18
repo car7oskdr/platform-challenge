@@ -674,3 +674,26 @@ sustituyó por una lista blanca: se enumeran las rutas publicadas y el resto que
 fuera por defecto. Verificado desde fuera (`/metrics`, `/health`, `/ready`,
 `/docs` → 404) y desde dentro del pod (los tres → 200), con Prometheus siguiendo
 `up = 1` en las dos réplicas.
+
+**Las capturas corrigieron una alerta.** Al revisar las dos imágenes del
+dashboard antes de commitearlas, la IA contrastó el texto con lo que mostraban y
+encontró dos afirmaciones falsas: la captura no se había tomado con
+`DB_POOL_MAX_SIZE=1` —el panel muestra el máximo configurado plano en 20, es
+decir 10 por réplica, y la variable nunca llegó a los pods— y las conexiones
+libres no caían a 0 en ningún momento.
+
+Lo segundo destapó un problema de diseño real: en el panel del pool, *abiertas* y
+*libres* suben y bajan juntas. Las gauges se leen en el instante del scrape, cada
+15 s, y con consultas de 1-2 ms es improbable que ese instante coincida con el
+momento en que las conexiones están ocupadas. Mi alerta
+`PoolDeConexionesAgotado`, basada en `db_pool_size == db_pool_max_size and
+db_pool_idle == 0`, **no se habría disparado nunca**, pese a que la cola era real
+y el histograma de espera la medía subiendo de 0,5 ms a casi 5 ms.
+
+Sustituida por `EsperaAltaPorConexion`, sobre el p95 de
+`db_acquire_duration_seconds`: un histograma acumula todas las esperas en lugar
+de muestrear una foto cada 15 s. Las gauges se quedan como panel de contexto.
+
+El texto del README se ajustó a lo que las capturas muestran de verdad —30
+peticiones concurrentes contra el pool por defecto— y la corrección se documenta
+en la propia sección, porque el hallazgo vino de mirar los paneles.

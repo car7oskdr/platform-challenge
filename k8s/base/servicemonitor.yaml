@@ -49,19 +49,28 @@ spec:
             summary: "Más del 5% de las respuestas son 5xx"
             description: "Tasa de error = {{ $value | humanizePercentage }}."
 
-        - alert: PoolDeConexionesAgotado
+        # Sobre el histograma y no sobre db_pool_idle: las gauges se leen en el
+        # instante del scrape, cada 15 s, y con consultas de 1-2 ms casi nunca
+        # coinciden con el momento en que las conexiones están ocupadas. Medido
+        # en este cluster: con cola real y el p95 de espera en 5 ms, `abiertas` y
+        # `libres` seguían valiendo lo mismo. El histograma acumula todas las
+        # esperas, no una foto cada 15 s.
+        - alert: EsperaAltaPorConexion
           expr: |
-            (db_pool_size == db_pool_max_size) and (db_pool_idle == 0)
+            histogram_quantile(
+              0.95,
+              sum(rate(db_acquire_duration_seconds_bucket[5m])) by (le)
+            ) > 0.025
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "Pool de conexiones agotado en {{ $labels.pod }}"
+            summary: "Las peticiones esperan más de 25 ms por una conexión"
             description: >-
-              Las peticiones esperan turno. Contrastar con
-              db_acquire_duration_seconds: si la espera domina la latencia HTTP
-              y db_query_duration_seconds es normal, el cuello de botella es el
-              pool, no PostgreSQL.
+              p95 de espera = {{ $value | humanizeDuration }}. Contrastar con
+              db_query_duration_seconds: si la consulta es normal, el cuello de
+              botella es el pool y no PostgreSQL. Subir DB_POOL_MAX_SIZE solo si
+              la base aguanta; si ya está al límite, más conexiones lo empeoran.
 
         - alert: ReplicasNoListas
           expr: |

@@ -246,8 +246,37 @@ que conviene mirarlas para diagnosticar.
 El segundo panel de la fila de base de datos es el más directo: cuando la línea
 de espera se despega de la de consulta, el problema no es PostgreSQL.
 
-<!-- TODO: capturas del dashboard, una en reposo y otra bajo carga con el pool
-     apretado (DB_POOL_MAX_SIZE=1), donde la separación se ve a simple vista. -->
+Tráfico normal, con el pool en su tamaño por defecto:
+
+![Dashboard con tráfico normal](docs/grafana-reposo.png)
+
+El mismo dashboard con 30 peticiones concurrentes contra el pool por defecto. En
+el panel de la segunda fila, la espera por conexión pasa de 0,5 ms a casi 5 ms
+mientras la consulta baja a 1,7 ms: **el tiempo se va en la cola, no en
+PostgreSQL**. A la derecha, el pool abre sus 20 conexiones —10 por réplica— y a
+la izquierda el p95 de `/notes` sube en consecuencia.
+
+![Dashboard con el pool saturado](docs/grafana-pool-apretado.png)
+
+Esta captura, además, corrigió una alerta. En el panel del pool, *abiertas* y
+*libres* suben y bajan **juntas**: nunca se ve `libres = 0`, pese a que la cola es
+real y el histograma de espera la mide. El motivo es que las gauges se leen en el
+instante del scrape, cada 15 segundos, y con consultas de 1-2 ms es
+improbabilísimo que ese instante coincida con el momento en que las conexiones
+están ocupadas. Una alerta sobre `db_pool_idle == 0` no se dispararía nunca. La
+señal correcta es el histograma, que acumula todas las esperas en vez de
+muestrear una foto; las gauges quedan como panel de contexto.
+
+Las capturas se generan con el image-renderer de Grafana, sin navegador:
+
+```bash
+helm upgrade monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --reuse-values --set grafana.imageRenderer.enabled=true
+
+kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
+curl -u admin:admin -o docs/grafana-reposo.png \
+  "localhost:3000/render/d/platform-challenge/platform-challenge?from=now-30m&to=now&width=1600&height=1400&kiosk=true&theme=light"
+```
 
 ### Alertas
 
@@ -255,7 +284,7 @@ de espera se despega de la de consulta, el problema no es PostgreSQL.
 |---|---|---|---|
 | `LatenciaAltaP95` | p95 > 500 ms, excluyendo las rutas de probe | 10m | warning |
 | `TasaDeErrores5xx` | más del 5 % de respuestas 5xx | 5m | critical |
-| `PoolDeConexionesAgotado` | `db_pool_size == db_pool_max_size` y `db_pool_idle == 0` | 5m | warning |
+| `EsperaAltaPorConexion` | p95 de espera por una conexión del pool > 25 ms | 5m | warning |
 | `ReplicasNoListas` | réplicas listas < réplicas deseadas | 5m | critical |
 
 Tres decisiones de diseño detrás de esa tabla:
@@ -263,10 +292,13 @@ Tres decisiones de diseño detrás de esa tabla:
 - `outcome="failure"` incluye los 4xx, así que no sirve para la alerta: un
   cliente enviando datos inválidos dispararía el ratio sin que la aplicación
   tenga nada roto. La alerta filtra `status=~"5.."`.
-- La condición del pool necesita las dos gauges. Con `min_size=0`, el pool no
-  abre conexiones hasta usarlas: en reposo `size=0, idle=0`, indistinguible del
-  agotamiento. La condición correcta es "he abierto todas las que podía y
-  ninguna está libre".
+- La alerta del pool mira el histograma, no las gauges. La primera versión
+  comprobaba `db_pool_size == db_pool_max_size` y `db_pool_idle == 0`, condición
+  que evita el falso positivo de `min_size=0` —en reposo `size=0, idle=0`, que
+  es indistinguible del agotamiento— pero que aun así no sirve: las gauges se
+  muestrean cada 15 s y casi nunca capturan el instante en que las conexiones
+  están ocupadas. Se ve en la captura de arriba. El histograma acumula todas las
+  esperas y sí las detecta.
 - No hay alerta de throttling de CPU. No se declaran `limits.cpu`, así que
   no hay cuota CFS y el kernel ni siquiera genera esas métricas. La capa
   contenedor queda descartada. El límite de memoria sí existe, así que el
@@ -366,14 +398,21 @@ Cada una es una decisión con su coste, y conviene que esté escrita.
 8. `prune` no borra lo que ArgoCD nunca gestionó. Un pod creado a mano es
    invisible para la Application: GitOps no garantiza que el cluster contenga
    solo lo que hay en el repositorio.
-9. Una serie de Prometheus que nace alta no produce `rate()`. Una ráfaga de
-   errores entre dos scrapes es invisible, porque la primera muestra de una serie
-   es su línea base. Es un argumento a favor de `for:` largos y una advertencia
-   sobre las pruebas de carga cortas.
-10. `prometheus_client` obliga a un worker por pod. Con varios workers de
+9. `selfHeal` tampoco alcanza a los campos que ArgoCD no gestiona. Revierte
+   los cambios sobre campos que están en el manifiesto (`kubectl scale` sobre
+   `replicas` se deshace en segundos), pero un campo nuevo añadido por otro
+   gestor queda fuera del diff a tres vías y sobrevive indefinidamente. Ocurrió
+   durante el desarrollo: un `kubectl set env` de prueba estuvo horas en el
+   Deployment con la Application marcada como `Synced`, y ni un refresh duro lo
+   detectó. Hubo que borrarlo a mano.
+10. Una serie de Prometheus que nace alta no produce `rate()`. Una ráfaga de
+    errores entre dos scrapes es invisible, porque la primera muestra de una
+    serie es su línea base. Es un argumento a favor de `for:` largos y una
+    advertencia sobre las pruebas de carga cortas.
+11. `prometheus_client` obliga a un worker por pod. Con varios workers de
     uvicorn cada proceso tendría su propio registro y los contadores serían
     incoherentes. Se escala con réplicas.
-11. Sin HTTPS ni autenticación. Es un entorno local; en producción harían
+12. Sin HTTPS ni autenticación. Es un entorno local; en producción harían
     falta TLS en el Ingress y autenticación en la API.
 
 ---
