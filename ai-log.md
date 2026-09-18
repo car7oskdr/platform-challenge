@@ -639,3 +639,38 @@ lugar, el Ingress enumera las rutas publicadas y **deniega por defecto**. Quedan
 fuera `/metrics`, `/health`, `/ready`, `/docs` y `/openapi.json`; las probes las
 hace el kubelet contra el pod y Swagger es documentación, no API. Publicadas solo
 `/notes` y `/version`.
+
+---
+
+## Fase 7 — README
+
+**Prompts usados**
+- `escribe el README con la estructura que propusiste`
+- `commitea y sube`
+
+Este es el único artefacto extenso que pedí que redactara la IA, sobre una
+estructura que ella misma había propuesto y que acepté: arquitectura, cómo
+correrlo, decisiones, observabilidad, diagnóstico de latencia, comportamiento
+verificado, limitaciones y uso de la IA. Después lo repasé entero y ajusté el
+tono y varias formulaciones.
+
+La condición que puse —y que la IA respetó— es que **no hubiera una sola cifra
+inventada**: todos los números del README salen de mediciones hechas durante el
+proyecto y registradas en este mismo archivo (el experimento del pool, la
+descomposición del p95 en el cluster, las 120 peticiones sin fallos durante un
+rollout, los 1,8 ms del `/ready` degradado, los 70 MB comprimidos de la imagen).
+La IA contrastó además cada afirmación contra el código y el cluster antes de
+darlas por buenas.
+
+Quedan dos marcas `TODO`: las capturas del dashboard y el enlace al reporte
+Paxel. También señaló que el comando de Helm de `kube-prometheus-stack` que
+documentó está reconstruido a partir de los selectores que vio en el cluster, no
+del comando que ejecuté yo, y que debo verificarlo.
+
+**Antes del README, cierre de la superficie expuesta.** Al preparar la sección
+"cómo correrlo" la IA detectó que el Ingress con prefijo `/` dejaba `/metrics`
+accesible desde fuera. Pedí cerrarlo de la forma más formal posible y se
+sustituyó por una lista blanca: se enumeran las rutas publicadas y el resto queda
+fuera por defecto. Verificado desde fuera (`/metrics`, `/health`, `/ready`,
+`/docs` → 404) y desde dentro del pod (los tres → 200), con Prometheus siguiendo
+`up = 1` en las dos réplicas.
