@@ -443,7 +443,7 @@ Tres ejemplos de lo que sí aportó:
   "base de datos no disponible": un error del cliente disfrazado de dependencia
   caída, que habría disparado en falso la alerta de 5xx.
 
-<!-- TODO: enlace al reporte Paxel -->
+**Reporte Paxel:** https://paxel.ycombinator.com/results/53zd6nfe
 
 ---
 

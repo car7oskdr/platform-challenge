@@ -697,3 +697,10 @@ de muestrear una foto cada 15 s. Las gauges se quedan como panel de contexto.
 El texto del README se ajustó a lo que las capturas muestran de verdad —30
 peticiones concurrentes contra el pool por defecto— y la corrección se documenta
 en la propia sección, porque el hallazgo vino de mirar los paneles.
+
+---
+
+## Fase 8 — Reporte Paxel
+
+Reporte enlazado en el README, en la sección "Cómo usé la IA", junto al enlace a
+este registro: https://paxel.ycombinator.com/results/53zd6nfe
