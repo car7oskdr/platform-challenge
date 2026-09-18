@@ -186,3 +186,63 @@ mostrar el `\d notes`)
   para ordenar los imports.
 - Corregir la llamada de logging del `lifespan`.
 - Los commits de esta fase y la redacción de este archivo.
+
+---
+
+## Fase 2 — Dockerfile multi-stage
+
+**Prompts usados**
+- `commitea eso y empecemos con la fase 2`
+- `ya tengo el Dockerfile analizalo y haz las pruebas necesarias para validarlo`
+- `ya agregué el COPY, corre el build otra vez`
+- `ya lo moví, corre el build`
+- `corrige el .dockerignore`
+
+**Qué aportó la IA**
+
+Antes de escribir el Dockerfile planteó las decisiones en vez de resolverlas:
+qué cruza entre etapas, en qué orden van los `COPY` para no invalidar la capa de
+dependencias en cada commit, por qué `--frozen` es lo que se quiere en un build
+reproducible, y por qué `alpine` —pese a dar la imagen más pequeña— obligaría a
+compilar `asyncpg`, que usa musl en lugar de glibc.
+
+Advirtió de que los scripts de un venv guardan rutas absolutas, así que la ruta
+de construcción y la de destino deben coincidir, y de que uvicorn escuchando en
+`127.0.0.1` dentro de un contenedor no es accesible desde fuera.
+
+**Errores que detectó en mi Dockerfile**
+- La etapa `builder` no copiaba `pyproject.toml` ni `uv.lock`, así que
+  `uv sync --frozen` fallaba con *"No pyproject.toml found"*.
+- Al corregirlo puse el `COPY` en la etapa `runtime`. Cada `FROM` empieza un
+  sistema de archivos nuevo: lo que se copia en la segunda etapa no existe en la
+  primera. Además estaba antes del `WORKDIR`, con lo que los archivos aterrizaban
+  en `/` y no en `/app` — el destino relativo de un `COPY` depende del `WORKDIR`
+  vigente en ese momento.
+- `.gitignore/` en el `.dockerignore` no excluía nada: la barra final solo casa
+  con directorios.
+
+**Validación de la imagen** (la ejecutó la IA)
+- `whoami` → `appuser`, `uid=10001`; escribir en `/app` da *Permission denied*.
+- `model/` sigue siendo hermana de `app/` dentro de la imagen, así que la
+  resolución de `model/VERSION` por `__file__` funciona con el WORKDIR del
+  contenedor.
+- `uv` y `ruff` no están en la imagen final: el multi-stage cumple su función.
+- Contra el Postgres local vía `host.docker.internal`: `/version`, `/health`,
+  `/ready`, `POST /notes` y `/metrics` responden correctamente.
+- Tocando `app/main.py` y reconstruyendo, la capa `RUN uv sync` sale `CACHED`:
+  el orden de los `COPY` hace su trabajo.
+- Imagen de 287 MB, de los que 57,8 MB son el venv y el resto la base slim.
+
+**Qué decidí yo**
+- `python:3.14-slim` en vez de alpine, para no compilar `asyncpg`.
+- uv entra al build con `COPY --from=ghcr.io/astral-sh/uv:0.12.3`, con versión
+  fija, y no queda en la imagen final.
+- Los archivos son propiedad de `root` y `appuser` solo los lee: un proceso que
+  no puede escribir su propio código no puede ser modificado en caliente.
+- `migrations/` queda fuera del contexto de build; cómo llega el SQL al Job de
+  migración se decide en la Fase 3.
+
+**Consecuencia anotada para la Fase 7:** la imagen no trae `ps` ni herramientas
+de diagnóstico. Es lo deseable en producción, pero significa que una latencia
+alta no se depura desde dentro del contenedor, sino con métricas de
+cAdvisor/kubelet y `kubectl debug` con un contenedor efímero.

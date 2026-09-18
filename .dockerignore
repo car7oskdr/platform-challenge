@@ -1,0 +1,27 @@
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+
+# git
+.git/
+.gitignore
+.github/
+
+# env
+.env
+*.local
+
+# docunmentacion
+README.md
+CLAUDE.md
+ai-log.md
+k8s/
+migrations/
+
+# editores
+.DS_Store
+.idea/
+.vscode/
