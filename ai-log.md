@@ -599,3 +599,21 @@ migración se ejecutó como hook en su wave antes de desplegar la app.
 **selfHeal comprobado:** escalé el Deployment a 5 réplicas con `kubectl scale` y
 ArgoCD lo devolvió a 2 en segundos. A partir de aquí el cluster obedece al
 repositorio, no a mí: cualquier cambio que no pase por un commit se deshace solo.
+
+**Cadena completa ejercitada con la 0.5.0.** `model/VERSION` → CI (lint,
+gitleaks, build multi-arch y push a GHCR en 2m39s) → commit-back `95c4d74` que
+cambia `newTag: 0.4.0` por `0.5.0` → ArgoCD detecta el commit, pasa a
+`OutOfSync` y sincroniza → el cluster acaba corriendo
+`ghcr.io/car7oskdr/platform-challenge:0.5.0` y `/version` responde `0.5.0`. El
+único `kubectl` ejecutado en toda la cadena fue de lectura.
+
+Durante el rollout se vieron cuatro pods a la vez —dos nuevos y dos viejos, uno
+de ellos terminando—, que es `maxUnavailable: 0` con `maxSurge: 1`, y el hook de
+migración ya completado antes de que la app se desplegara.
+
+**Matiz sobre `prune` que descubrí con un pod de carga creado a mano:** ArgoCD no
+borra "todo lo que no está en el repo", sino lo que él gestionó alguna vez y ya
+no aparece. Un pod creado con `kubectl run`, sin las marcas de seguimiento de la
+Application, le resulta invisible. Permite depurar con pods efímeros sin que los
+borre, pero significa que GitOps no garantiza que el cluster contenga *solo* lo
+que hay en git.
