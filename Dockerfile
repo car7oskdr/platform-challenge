@@ -23,7 +23,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
-RUN useradd --create-home --uid 10001 appuser
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && useradd --create-home --uid 10001 appuser \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -34,7 +37,9 @@ COPY model/ ./model/
 
 COPY migrations/ ./migrations/
 
-USER appuser
+USER 10001
+
+# Documenta el puerto; no publica nada por sí solo (eso es el -p del run).
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

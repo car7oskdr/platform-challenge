@@ -434,9 +434,66 @@ Con 428 consultas/s sostenidas. Las cuatro alertas cargan con `salud=ok`.
   dashboard aparece en Grafana como provisionado, y **las 16 queries de los 9
   paneles devuelven datos** ejecutadas a través del datasource de Grafana.
 
-**Lección repetida dos veces, para el README:** una serie que nace alta no
-produce `rate()`. Tanto la ráfaga de 5xx como las 300 peticiones de prueba
+**Lección repetida dos veces (Fase 3.5), para el README:** una serie que nace
+alta no produce `rate()`. Tanto la ráfaga de 5xx como las 300 peticiones de prueba
 quedaron invisibles (`p95 = nan`) porque todos los incrementos ocurrieron entre
 dos scrapes y la primera muestra de una serie es su línea base. Con carga
 sostenida los percentiles salen correctos. Es un argumento a favor de `for:`
 largos en las alertas y una advertencia sobre las pruebas de carga cortas.
+
+---
+
+## Fase 4 — CI en GitHub Actions
+
+**Prompts usados**
+- `sube y empecemos con la fase 4`
+- `analiza los cambios que recien agregue y sube la version de 0.1.0 a 0.2.0
+  para que sea una version nueva y limpia`
+- `ya agregue lo de concurrencia, analiza y si todo ok commitea y da segimiento`
+
+**La trampa que advirtió la IA antes de escribir el workflow:** mi Mac es arm64 y
+los runners de GitHub son amd64. Una imagen construida en el CI sin más no podría
+ejecutarse en mi k3d, y el síntoma no es "arquitectura incorrecta" sino un
+`exec format error` o un CrashLoopBackOff sin logs útiles. No lo había notado
+porque hasta ahora uso `k3d image import` con una imagen construida en local.
+Elegí **multi-arch** (`linux/amd64,linux/arm64`): más lento por la emulación
+QEMU, pero es lo único coherente con que ArgoCD despliegue lo que hay en GHCR.
+
+**Qué decidí yo**
+- **Tag inmutable:** el CI comprueba con `docker manifest inspect` que el tag no
+  exista y **falla** si ya está publicado. Un tag que cambia de contenido rompe
+  la trazabilidad: quien tenga `0.1.0` desplegado no sabría cuál de las dos es.
+  Para que no sea un incordio, el trigger lleva `paths:`, así que cambios en el
+  README o en los manifiestos no disparan publicación, y además se publica
+  siempre `:sha-<commit>`, que es el identificador realmente inmutable.
+- **PR vs main:** en pull request se construye todo —se valida que el Dockerfile
+  compila— pero no se publica, con `push: ${{ github.event_name == 'push' }}`.
+- **Trivy en dos pasos:** `CRITICAL` bloquea, `HIGH,MEDIUM` informa, ambos con
+  `ignore-unfixed`. Un CI que falla por un CVE sin parche disponible es un CI que
+  se acaba ignorando.
+- **`USER 10001` en vez de `USER appuser`**: Kubernetes valida `runAsNonRoot`
+  comparando UIDs; con un nombre no puede saber si es root sin arrancar el
+  contenedor.
+
+**Errores que detectó la IA**
+- **Faltaba `concurrency`.** Dos pushes seguidos lanzaban dos runs simultáneos:
+  ambos pasarían la comprobación de "el tag no existe" antes de que ninguno
+  publicara, y el segundo sobrescribiría al primero — justo lo que la
+  comprobación pretende evitar. Lo añadí con `cancel-in-progress` **solo en
+  PRs**: cancelar un push a mitad de publicación dejaría el registry a medias.
+- El filtro de `paths` estaba solo en `push` y no en `pull_request`, así que un
+  PR que tocara el README lanzaba el build multi-arch completo.
+- **Trivy solo escanea amd64**, porque `load: true` solo puede cargar la
+  plataforma del runner. La imagen arm64 que se publica no pasa por el escáner.
+  Queda documentado como limitación conocida.
+- El `apt-get upgrade` que añadí al Dockerfile quita CVEs pero **rompe la
+  reproducibilidad**: dos builds del mismo commit en semanas distintas dan
+  imágenes distintas. Decisión consciente, a explicar en el README.
+
+**Efecto secundario intencionado:** el filtro de `paths` no incluye `k8s/**`, así
+que el commit-back de la Fase 5 sobre `kustomization.yaml` no volverá a disparar
+el CI. Sin eso habría un bucle infinito.
+
+**Política que asumo:** con el tag bloqueante, todo push a `main` que toque
+`app/**` sin subir `model/VERSION` deja el CI en rojo. Es deliberado, y por eso
+esta fase sube la versión a **0.2.0**.
